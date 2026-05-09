@@ -11,23 +11,44 @@ const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
 // ─── Cache ────────────────────────────────────────────────────────────────────
 const pageCache = new Map();
 const streamCache = new Map();
-const PAGE_TTL = 30 * 1000; // تقليل الكاش مؤقتاً للتأكد من التحديث الفوري
+const PAGE_TTL = 3 * 60 * 1000; // كاش لمدة 3 دقائق للمحافظة على سرعة الاستجابة وتخفيف الضغط
 const STREAM_TTL = 30 * 60 * 1000;
 
 async function fetchHtml(url) {
   const cached = pageCache.get(url);
   if (cached && Date.now() - cached.ts < PAGE_TTL) return cached.html;
 
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-      "Accept-Language": "ar,en;q=0.9",
-      Referer: BASE_URL,
-    },
-  });
-  const html = await res.text();
-  pageCache.set(url, { html, ts: Date.now() });
-  return html;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ar,en-US;q=0.7,en;q=0.3",
+        "Cache-Control": "max-age=0",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        Referer: BASE_URL,
+      },
+      timeout: 8000 // تحديد وقت أقصى للطلب لتجنب تعليق واجهة ستريمو
+    });
+    
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    
+    const html = await res.text();
+    if (html && html.length > 200) { // التأكد من جلب صفحة حقيقية وليست فارغة
+      pageCache.set(url, { html, ts: Date.now() });
+      return html;
+    }
+    throw new Error("Empty or blocked HTML received");
+  } catch (err) {
+    console.error(`[Fetch Error] Failed to load URL: ${url}. Error: ${err.message}`);
+    // إذا كان هناك كاش قديم تالف، نرجعه كخيار احتياطي بدلاً من الانهيار
+    if (cached) return cached.html;
+    return "";
+  }
 }
 
 // ─── Catalog definitions ──────────────────────────────────────────────────────
@@ -79,12 +100,14 @@ async function getCatalogItems(catalogId) {
   if (!catalog) return [];
 
   const html = await fetchHtml(catalog.url);
+  if (!html) return [];
+  
   const $ = load(html);
   const items = [];
 
-  $("img.lazy, img[data-src]").each((_i, el) => {
+  $("img.lazy, img[data-src], img[src]").each((_i, el) => {
     const imgEl = $(el);
-    const dataSrc = imgEl.attr("data-src") || "";
+    const dataSrc = imgEl.attr("data-src") || imgEl.attr("src") || "";
     const name = imgEl.attr("alt") || "";
     if (!name) return;
 
@@ -109,28 +132,22 @@ async function getCatalogItems(catalogId) {
 
 async function getSeriesMeta(slug) {
   const url = `${BASE_URL}/watch/${slug}.html`;
-  console.log(`[Diagnostic] Fetching meta for URL: ${url}`);
-  
   const html = await fetchHtml(url);
+  if (!html) return null;
+  
   const $ = load(html);
 
-  // 1. جلب اسم المسلسل من h1 أو title أو أول صورة متوفرة
   let name = $("h1").first().text().trim();
   if (!name) {
     name = $("title").text().replace("alooytv", "").replace("|", "").replace("مشاهدة", "").replace("مسلسل", "").trim();
   }
-  console.log(`[Diagnostic] Extracted Title: "${name}"`);
 
-  // 2. محاولة جلب الصورة الرئيسية للمسلسل من الصفحة
   let poster = "";
-  
-  // محاولة 1: البحث عن أي وسام صورة يحتوي على مسار البوسترات الشهير بالموقع
   const thumbImg = $("img[src*='/uploads/video_thumb/'], img[data-src*='/uploads/video_thumb/']").first();
   if (thumbImg.length) {
     poster = thumbImg.attr("data-src") || thumbImg.attr("src") || "";
   }
   
-  // محاولة 2: إذا لم تنجح، ابحث عن وسم meta og:image الخاص بمواقع الويب
   if (!poster) {
     poster = $("meta[property='og:image']").attr("content") || "";
   }
@@ -140,9 +157,7 @@ async function getSeriesMeta(slug) {
   } else if (!poster.startsWith("http")) {
     poster = `${IMAGE_BASE}${poster}`;
   }
-  console.log(`[Diagnostic] Extracted Poster Link: "${poster}"`);
 
-  // 3. جلب القصة والتصنيف
   const genre = $("strong:contains('Genre')").parent().find("a").first().text().trim() || "دراما";
   
   let overview = "";
@@ -157,25 +172,19 @@ async function getSeriesMeta(slug) {
   const releaseMatch = releaseText.match(/\d{4}-\d{2}-\d{2}/);
   const releaseInfo = releaseMatch ? releaseMatch[0] : "2026";
 
-  // 4. جلب الحلقات بطرق بديلة ومضمونة لضمان عدم تخطي أي زر
   const episodes = [];
   
-  // سنقوم بالبحث في كل الروابط <a> بالصفحة التي قد تشير لحلقات
   $("a").each((_i, el) => {
     const linkEl = $(el);
     const href = linkEl.attr("href") || "";
     const text = linkEl.text().trim();
 
-    // نتحقق إذا كان الرابط يحتوي على كلمة key أو يشبه شكل روابط حلقات الموقع
     const keyMatch = href.match(/[?&]key=([^&]+)/);
     if (keyMatch) {
       const key = keyMatch[1];
-      
-      // استخراج رقم الحلقة من النص (مثال: EP#1 أو الحلقة 1 أو 1)
       const epMatch = text.match(/EP#?(\d+)/i) || text.match(/(\d+)/);
       const epNum = epMatch ? parseInt(epMatch[1], 10) : (episodes.length + 1);
 
-      // التأكد من عدم تكرار نفس المفتاح
       if (!episodes.some(ep => ep.key === key)) {
         episodes.push({
           id: `alooytv:${slug}:${key}`,
@@ -189,9 +198,6 @@ async function getSeriesMeta(slug) {
     }
   });
 
-  console.log(`[Diagnostic] Total Episodes Found: ${episodes.length}`);
-
-  // ترتيب الحلقات تصاعدياً
   episodes.sort((a, b) => a.episode - b.episode);
 
   return {
@@ -214,6 +220,7 @@ async function getDirectStreamUrl(slug, key) {
   const url = `${BASE_URL}/watch/${slug}.html?key=${key}`;
   try {
     const html = await fetchHtml(url);
+    if (!html) return null;
 
     const srcMatch = html.match(/<source\s+src="(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/i);
     if (srcMatch && srcMatch[1] && !srcMatch[1].match(/vid\d+\.0/)) {
@@ -229,8 +236,8 @@ async function getDirectStreamUrl(slug, key) {
         return decoded;
       }
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.error(`[Stream Error] for key ${key}: ${err.message}`);
   }
   return null;
 }
@@ -244,12 +251,10 @@ app.use((_req, res, next) => {
   next();
 });
 
-// الصفحة الرئيسية لمتابعة التشخيص
 app.get("/", (_req, res) => {
   res.send("<h1>AlooYTV Stremio Addon is running successfully!</h1><p>Please load <a href='/manifest.json'>/manifest.json</a> in Stremio.</p>");
 });
 
-// مسار تشخيصي مباشر يمكنك فتحه في المتصفح لرؤية تفاصيل جلب المسلسل بدون ستريمو
 app.get("/test-meta/:slug", async (req, res) => {
   const { slug } = req.params;
   try {
@@ -268,6 +273,10 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   try {
     const items = await getCatalogItems(id);
+    if (!items || items.length === 0) {
+      // إرجاع مصفوفة فارغة لتجنب تحطم التطبيق والسماح له بإعادة المحاولة
+      return res.json({ metas: [] });
+    }
     const metas = items
       .filter((i) => i.type === type || type === "all")
       .map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster, posterShape: "poster" }));
@@ -286,8 +295,6 @@ app.get("/meta/:type/:id.json", async (req, res) => {
     if (!meta) return res.status(404).json({ meta: null });
 
     const finalType = requestedType === "movie" ? "movie" : "series";
-    
-    // تحويل الحلقات إلى صيغة ستريمو الرسمية لكي تظهر في القائمة
     const videos = meta.episodes.map((ep) => ({
       id: ep.id,
       title: ep.title,
@@ -341,6 +348,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       });
     }
 
+    // إضافة رابط المتصفح دائماً كخيار احتياطي ومضمون
     streams.push({
       title: "🌐 AlooYTV - متصفح الويب",
       externalUrl: `${BASE_URL}/watch/${slug}.html?key=${key}`,
