@@ -67,7 +67,7 @@ const CATALOGS = [
 // ─── Manifest ─────────────────────────────────────────────────────────────────
 const MANIFEST = {
   id: "community.alooytv.addon",
-  version: "1.0.3", // تحديث النسخة لإجبار التطبيقات على التحديث الفوري
+  version: "1.0.4", // تحديث الإصدار لإجبار Forward على كسر الكاش القديم فوراً
   name: "AlooYTV",
   description: "مسلسلات وأفلام عربية وتركية وخليجية وفارسية وأجنبية من موقع AlooYTV",
   logo: "https://bp.alooytv13.xyz/favicon.ico",
@@ -77,14 +77,17 @@ const MANIFEST = {
     type: c.type,
     id: c.id,
     name: c.name,
-    extra: [{ name: "skip", isRequired: false }],
+    extra: [
+      { name: "skip", isRequired: false },
+      { name: "search", isRequired: false } // دعم البحث داخل تطبيقات ستريمو والبدائل
+    ],
   })),
   resources: [
     { name: "catalog", types: ["series", "movie"] },
     { name: "meta",    types: ["series", "movie"], idPrefixes: ["alooytvseries:", "alooytvmovie:"] },
     { name: "stream",  types: ["series", "movie"], idPrefixes: ["alooytvseries:", "alooytvmovie:"] },
   ],
-  idPrefixes: ["alooytvseries:", "alooytvmovie:"], // استخدام بادئة فريدة تماماً تمنع التداخل
+  idPrefixes: ["alooytvseries:", "alooytvmovie:"],
   behaviorHints: { configurable: false, configurationRequired: false },
 };
 
@@ -118,7 +121,6 @@ async function getCatalogItems(catalogId) {
       ? (dataSrc.startsWith("http") ? dataSrc : `${IMAGE_BASE}${dataSrc}`)
       : DEFAULT_THUMB;
 
-    // استخدام بادئة فريدة بناءً على نوع التصنيف لمنع تداخل الاستعلامات الخارجية
     const prefix = catalog.type === "movie" ? "alooytvmovie:" : "alooytvseries:";
     items.push({ id: `${prefix}${slug}`, type: catalog.type, name, poster, slug });
   });
@@ -265,7 +267,7 @@ app.get("/test-meta/:slug", async (req, res) => {
 // Manifest
 app.get("/manifest.json", (_req, res) => res.json(MANIFEST));
 
-// Catalog
+// Catalog (تم تعديل التصفية لتدعم نوع all لتوافق Forward التام)
 app.get("/catalog/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
   try {
@@ -273,9 +275,12 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
     if (!items || items.length === 0) {
       return res.json({ metas: [] });
     }
+    
+    // دعم فلترة الكتالوجات للنوع المطلب أو إرجاع الكل إذا كان النوع "all" أو "series/movie" متداخلاً
     const metas = items
-      .filter((i) => i.type === type || type === "all")
+      .filter((i) => type === "all" || i.type === type || (type === "series" && i.type === "series") || (type === "movie" && i.type === "movie"))
       .map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster, posterShape: "poster" }));
+    
     res.json({ metas });
   } catch {
     res.json({ metas: [] });
@@ -285,7 +290,6 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
 // Meta
 app.get("/meta/:type/:id.json", async (req, res) => {
   const { type: requestedType, id } = req.params;
-  const isMovie = id.startsWith("alooytvmovie:");
   const slug = id.replace(/^(alooytvseries:|alooytvmovie:)/, "");
   
   try {
