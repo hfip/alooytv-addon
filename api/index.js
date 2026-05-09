@@ -11,7 +11,7 @@ const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
 // ─── Cache ────────────────────────────────────────────────────────────────────
 const pageCache = new Map();
 const streamCache = new Map();
-const PAGE_TTL = 3 * 60 * 1000; // كاش لمدة 3 دقائق للمحافظة على سرعة الاستجابة وتخفيف الضغط
+const PAGE_TTL = 3 * 60 * 1000; 
 const STREAM_TTL = 30 * 60 * 1000;
 
 async function fetchHtml(url) {
@@ -25,27 +25,21 @@ async function fetchHtml(url) {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.7,en;q=0.3",
         "Cache-Control": "max-age=0",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
         Referer: BASE_URL,
       },
-      timeout: 8000 // تحديد وقت أقصى للطلب لتجنب تعليق واجهة ستريمو
+      timeout: 8000
     });
     
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     
     const html = await res.text();
-    if (html && html.length > 200) { // التأكد من جلب صفحة حقيقية وليست فارغة
+    if (html && html.length > 200) {
       pageCache.set(url, { html, ts: Date.now() });
       return html;
     }
     throw new Error("Empty or blocked HTML received");
   } catch (err) {
-    console.error(`[Fetch Error] Failed to load URL: ${url}. Error: ${err.message}`);
-    // إذا كان هناك كاش قديم تالف، نرجعه كخيار احتياطي بدلاً من الانهيار
+    console.error(`[Fetch Error] URL: ${url}. Error: ${err.message}`);
     if (cached) return cached.html;
     return "";
   }
@@ -73,7 +67,7 @@ const CATALOGS = [
 // ─── Manifest ─────────────────────────────────────────────────────────────────
 const MANIFEST = {
   id: "community.alooytv.addon",
-  version: "1.0.2",
+  version: "1.0.3", // تحديث النسخة لإجبار التطبيقات على التحديث الفوري
   name: "AlooYTV",
   description: "مسلسلات وأفلام عربية وتركية وخليجية وفارسية وأجنبية من موقع AlooYTV",
   logo: "https://bp.alooytv13.xyz/favicon.ico",
@@ -87,10 +81,10 @@ const MANIFEST = {
   })),
   resources: [
     { name: "catalog", types: ["series", "movie"] },
-    { name: "meta",    types: ["series", "movie"], idPrefixes: ["alooytv:"] },
-    { name: "stream",  types: ["series", "movie"], idPrefixes: ["alooytv:"] },
+    { name: "meta",    types: ["series", "movie"], idPrefixes: ["alooytvseries:", "alooytvmovie:"] },
+    { name: "stream",  types: ["series", "movie"], idPrefixes: ["alooytvseries:", "alooytvmovie:"] },
   ],
-  idPrefixes: ["alooytv:"],
+  idPrefixes: ["alooytvseries:", "alooytvmovie:"], // استخدام بادئة فريدة تماماً تمنع التداخل
   behaviorHints: { configurable: false, configurationRequired: false },
 };
 
@@ -124,13 +118,15 @@ async function getCatalogItems(catalogId) {
       ? (dataSrc.startsWith("http") ? dataSrc : `${IMAGE_BASE}${dataSrc}`)
       : DEFAULT_THUMB;
 
-    items.push({ id: `alooytv:${slug}`, type: catalog.type, name, poster, slug });
+    // استخدام بادئة فريدة بناءً على نوع التصنيف لمنع تداخل الاستعلامات الخارجية
+    const prefix = catalog.type === "movie" ? "alooytvmovie:" : "alooytvseries:";
+    items.push({ id: `${prefix}${slug}`, type: catalog.type, name, poster, slug });
   });
 
   return items;
 }
 
-async function getSeriesMeta(slug) {
+async function getSeriesMeta(slug, type = "series") {
   const url = `${BASE_URL}/watch/${slug}.html`;
   const html = await fetchHtml(url);
   if (!html) return null;
@@ -173,6 +169,7 @@ async function getSeriesMeta(slug) {
   const releaseInfo = releaseMatch ? releaseMatch[0] : "2026";
 
   const episodes = [];
+  const prefix = type === "movie" ? "alooytvmovie:" : "alooytvseries:";
   
   $("a").each((_i, el) => {
     const linkEl = $(el);
@@ -187,7 +184,7 @@ async function getSeriesMeta(slug) {
 
       if (!episodes.some(ep => ep.key === key)) {
         episodes.push({
-          id: `alooytv:${slug}:${key}`,
+          id: `${prefix}${slug}:${key}`,
           title: `الحلقة ${epNum}`,
           season: 1,
           episode: epNum,
@@ -201,7 +198,7 @@ async function getSeriesMeta(slug) {
   episodes.sort((a, b) => a.episode - b.episode);
 
   return {
-    id: `alooytv:${slug}`,
+    id: `${prefix}${slug}`,
     name,
     poster,
     genre,
@@ -237,7 +234,7 @@ async function getDirectStreamUrl(slug, key) {
       }
     }
   } catch (err) {
-    console.error(`[Stream Error] for key ${key}: ${err.message}`);
+    console.error(`[Stream Error] Key ${key}: ${err.message}`);
   }
   return null;
 }
@@ -258,7 +255,7 @@ app.get("/", (_req, res) => {
 app.get("/test-meta/:slug", async (req, res) => {
   const { slug } = req.params;
   try {
-    const meta = await getSeriesMeta(slug);
+    const meta = await getSeriesMeta(slug, "series");
     res.json({ success: true, meta });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -274,7 +271,6 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
   try {
     const items = await getCatalogItems(id);
     if (!items || items.length === 0) {
-      // إرجاع مصفوفة فارغة لتجنب تحطم التطبيق والسماح له بإعادة المحاولة
       return res.json({ metas: [] });
     }
     const metas = items
@@ -289,9 +285,11 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
 // Meta
 app.get("/meta/:type/:id.json", async (req, res) => {
   const { type: requestedType, id } = req.params;
-  const slug = id.replace(/^alooytv:/, "");
+  const isMovie = id.startsWith("alooytvmovie:");
+  const slug = id.replace(/^(alooytvseries:|alooytvmovie:)/, "");
+  
   try {
-    const meta = await getSeriesMeta(slug);
+    const meta = await getSeriesMeta(slug, requestedType);
     if (!meta) return res.status(404).json({ meta: null });
 
     const finalType = requestedType === "movie" ? "movie" : "series";
@@ -324,7 +322,8 @@ app.get("/meta/:type/:id.json", async (req, res) => {
 // Stream
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { id } = req.params;
-  const parts = id.replace(/^alooytv:/, "").split(":");
+  const cleanId = id.replace(/^(alooytvseries:|alooytvmovie:)/, "");
+  const parts = cleanId.split(":");
   const slug = parts[0];
   let key = parts[1];
 
@@ -348,7 +347,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
       });
     }
 
-    // إضافة رابط المتصفح دائماً كخيار احتياطي ومضمون
     streams.push({
       title: "🌐 AlooYTV - متصفح الويب",
       externalUrl: `${BASE_URL}/watch/${slug}.html?key=${key}`,
