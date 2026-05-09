@@ -1,0 +1,300 @@
+import express from "express";
+import cors from "cors";
+import { load } from "cheerio";
+import fetch from "node-fetch";
+
+const PORT = process.env.PORT || 7000;
+const BASE_URL = "https://bp.alooytv13.xyz";
+const IMAGE_BASE = "https://bp.alooytv13.xyz";
+const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
+
+// ─── Cache ────────────────────────────────────────────────────────────────────
+const pageCache = new Map();
+const streamCache = new Map();
+const PAGE_TTL = 5 * 60 * 1000;
+const STREAM_TTL = 30 * 60 * 1000;
+
+async function fetchHtml(url) {
+  const cached = pageCache.get(url);
+  if (cached && Date.now() - cached.ts < PAGE_TTL) return cached.html;
+
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "ar,en;q=0.9",
+      Referer: BASE_URL,
+    },
+  });
+  const html = await res.text();
+  pageCache.set(url, { html, ts: Date.now() });
+  return html;
+}
+
+// ─── Catalog definitions ──────────────────────────────────────────────────────
+const CATALOGS = [
+  { id: "latest",              name: "أحدث الحلقات",        type: "series", url: `${BASE_URL}/tv-series.html` },
+  { id: "ramadan-arabi-2026",  name: "رمضان عربي 2026 ★",   type: "series", url: `${BASE_URL}/genre/ramadan-arabi-2026.html` },
+  { id: "ramadan-kleeji-2026", name: "رمضان خليجي 2026 ★",  type: "series", url: `${BASE_URL}/genre/ramadan-kleeji-2026.html` },
+  { id: "turki",               name: "مسلسلات تركية",       type: "series", url: `${BASE_URL}/genre/turki.html` },
+  { id: "arabic",              name: "مسلسلات عربية",       type: "series", url: `${BASE_URL}/genre/arabic.html` },
+  { id: "kleeji",              name: "مسلسلات خليجية",      type: "series", url: `${BASE_URL}/genre/kleeji.html` },
+  { id: "farisi",              name: "مسلسلات فارسية",      type: "series", url: `${BASE_URL}/genre/farisi.html` },
+  { id: "ramadan-arabi-2025",  name: "رمضان عربي 2025",     type: "series", url: `${BASE_URL}/genre/ramadan-arabi-2025.html` },
+  { id: "ramadan-kleeji-2025", name: "رمضان خليجي 2025",    type: "series", url: `${BASE_URL}/genre/ramadan-kleeji-2025.html` },
+  { id: "Korean-movies",       name: "أفلام كورية",         type: "movie",  url: `${BASE_URL}/genre/Korean-movies.html` },
+  { id: "foreign-movies",      name: "أفلام أجنبية",        type: "movie",  url: `${BASE_URL}/genre/foreign-movies.html` },
+  { id: "anmi",                name: "أنمي",                type: "series", url: `${BASE_URL}/genre/anmi.html` },
+  { id: "Foreign-series",      name: "مسلسلات أجنبية",      type: "series", url: `${BASE_URL}/genre/Foreign-series.html` },
+  { id: "Korean-series",       name: "مسلسلات كورية",       type: "series", url: `${BASE_URL}/genre/Korean-series.html` },
+  { id: "asia-series",         name: "مسلسلات آسيوية",      type: "series", url: `${BASE_URL}/genre/asia-series.html` },
+];
+
+// ─── Manifest ─────────────────────────────────────────────────────────────────
+const MANIFEST = {
+  id: "community.alooytv.addon",
+  version: "1.0.2",
+  name: "AlooYTV",
+  description: "مسلسلات وأفلام عربية وتركية وخليجية وفارسية وأجنبية من موقع AlooYTV",
+  logo: "https://bp.alooytv13.xyz/favicon.ico",
+  background: "https://bp.alooytv13.xyz/uploads/video_thumb/1890.jpg",
+  types: ["series", "movie"],
+  catalogs: CATALOGS.map((c) => ({
+    type: c.type,
+    id: c.id,
+    name: c.name,
+    extra: [{ name: "skip", isRequired: false }],
+  })),
+  resources: [
+    { name: "catalog", types: ["series", "movie"] },
+    { name: "meta",    types: ["series", "movie"], idPrefixes: ["alooytv:"] },
+    { name: "stream",  types: ["series", "movie"], idPrefixes: ["alooytv:"] },
+  ],
+  idPrefixes: ["alooytv:"],
+  behaviorHints: { configurable: false, configurationRequired: false },
+};
+
+// ─── Scraper helpers ──────────────────────────────────────────────────────────
+async function getCatalogItems(catalogId) {
+  const catalog = CATALOGS.find((c) => c.id === catalogId);
+  if (!catalog) return [];
+
+  const html = await fetchHtml(catalog.url);
+  const $ = load(html);
+  const items = [];
+
+  $("img.lazy, img[data-src]").each((_i, el) => {
+    const imgEl = $(el);
+    const dataSrc = imgEl.attr("data-src") || "";
+    const name = imgEl.attr("alt") || "";
+    if (!name) return;
+
+    if (!dataSrc.includes("/uploads/video_thumb/") && !dataSrc.includes("/uploads/default_image/")) return;
+
+    let href = imgEl.closest("a").attr("href") || "";
+    if (!href) href = imgEl.parent().parent().find("a[href*='/watch/']").first().attr("href") || "";
+    if (!href.includes("/watch/")) return;
+
+    const slug = href.replace(/.*\/watch\//, "").replace(/\.html.*/, "");
+    if (items.some((i) => i.slug === slug)) return;
+
+    const poster = dataSrc && !dataSrc.includes("blank_thumbnail")
+      ? (dataSrc.startsWith("http") ? dataSrc : `${IMAGE_BASE}${dataSrc}`)
+      : DEFAULT_THUMB;
+
+    items.push({ id: `alooytv:${slug}`, type: catalog.type, name, poster, slug });
+  });
+
+  return items;
+}
+
+async function getSeriesMeta(slug) {
+  const url = `${BASE_URL}/watch/${slug}.html`;
+  const html = await fetchHtml(url);
+  const $ = load(html);
+
+  const name = $("h1").first().text().trim() || $("title").text().replace("alooytv", "").replace("|", "").trim();
+  if (!name) return null;
+
+  const posterEl = $(`img[alt="${name}"]`);
+  const poster =
+    posterEl.attr("data-src") ||
+    posterEl.attr("src") ||
+    $("img[data-src*='/uploads/video_thumb/']").first().attr("data-src") ||
+    $("img[src*='/uploads/video_thumb/']").first().attr("src") ||
+    DEFAULT_THUMB;
+
+  const genre = $("strong:contains('Genre')").parent().find("a").first().text().trim();
+  const releaseText = $("strong:contains('Release')").parent().text().trim();
+  const releaseMatch = releaseText.match(/\d{4}-\d{2}-\d{2}/);
+  const releaseInfo = releaseMatch ? releaseMatch[0] : "";
+
+  const episodes = [];
+  $("a[href*='?key=']").each((_i, el) => {
+    const linkEl = $(el);
+    const href = linkEl.attr("href") || "";
+    const keyMatch = href.match(/\?key=([^&]+)/);
+    if (!keyMatch) return;
+    const key = keyMatch[1];
+
+    const epText = linkEl.text().trim();
+    const epMatch = epText.match(/Ep#?(\d+)/i) || epText.match(/(\d+)/);
+    const epNum = epMatch ? parseInt(epMatch[1], 10) : episodes.length + 1;
+
+    episodes.push({
+      id: `alooytv:${slug}:${key}`,
+      title: `الحلقة ${epNum}`,
+      season: 1,
+      episode: epNum,
+      key,
+      slug,
+    });
+  });
+
+  return {
+    id: `alooytv:${slug}`,
+    name,
+    poster: poster.startsWith("http") ? poster : `${IMAGE_BASE}${poster}`,
+    genre,
+    releaseInfo,
+    slug,
+    episodes,
+  };
+}
+
+async function getDirectStreamUrl(slug, key) {
+  const cacheKey = `${slug}:${key}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < STREAM_TTL) return cached.url;
+
+  const url = `${BASE_URL}/watch/${slug}.html?key=${key}`;
+  try {
+    const html = await fetchHtml(url);
+
+    // Method 1: extract from <source src="..."> — only present when a valid key is used
+    const srcMatch = html.match(/<source\s+src="(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/i);
+    if (srcMatch && srcMatch[1] && !srcMatch[1].match(/vid\d+\.0/)) {
+      streamCache.set(cacheKey, { url: srcMatch[1], ts: Date.now() });
+      return srcMatch[1];
+    }
+
+    // Method 2: decode base64 from download link
+    const dlMatch = html.match(/download_video\.php\?video_url=([A-Za-z0-9+/=]+)&/);
+    if (dlMatch && dlMatch[1]) {
+      const decoded = Buffer.from(dlMatch[1], "base64").toString("utf8");
+      if (decoded.startsWith("http") && (decoded.includes(".mp4") || decoded.includes(".m3u8"))) {
+        streamCache.set(cacheKey, { url: decoded, ts: Date.now() });
+        return decoded;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+// ─── Express app ──────────────────────────────────────────────────────────────
+const app = express();
+app.use(cors());
+app.use((_req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  next();
+});
+
+// Manifest
+app.get("/manifest.json", (_req, res) => res.json(MANIFEST));
+
+// Catalog
+app.get("/catalog/:type/:id.json", async (req, res) => {
+  const { type, id } = req.params;
+  try {
+    const items = await getCatalogItems(id);
+    const metas = items
+      .filter((i) => i.type === type || type === "all")
+      .map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster, posterShape: "poster" }));
+    res.json({ metas });
+  } catch {
+    res.json({ metas: [] });
+  }
+});
+
+// Meta
+app.get("/meta/:type/:id.json", async (req, res) => {
+  const { type: requestedType, id } = req.params;
+  const slug = id.replace(/^alooytv:/, "");
+  try {
+    const meta = await getSeriesMeta(slug);
+    if (!meta) return res.status(404).json({ meta: null });
+
+    const finalType = requestedType === "movie" ? "movie" : "series";
+    const videos = meta.episodes.map((ep) => ({
+      id: ep.id,
+      title: ep.title,
+      season: ep.season,
+      episode: ep.episode,
+      released: new Date(Date.now() - ep.episode * 24 * 60 * 60 * 1000).toISOString(),
+      overview: "",
+    }));
+
+    res.json({
+      meta: {
+        id: meta.id,
+        type: finalType,
+        name: meta.name,
+        poster: meta.poster,
+        background: meta.poster,
+        description: meta.genre ? `النوع: ${meta.genre}` : "",
+        releaseInfo: meta.releaseInfo,
+        videos: finalType === "series" ? videos : undefined,
+      },
+    });
+  } catch {
+    res.status(500).json({ meta: null });
+  }
+});
+
+// Stream
+app.get("/stream/:type/:id.json", async (req, res) => {
+  const { id } = req.params;
+  const parts = id.replace(/^alooytv:/, "").split(":");
+  const slug = parts[0];
+  let key = parts[1];
+
+  if (!slug) return res.json({ streams: [] });
+
+  try {
+    if (!key) {
+      const meta = await getSeriesMeta(slug);
+      if (!meta || !meta.episodes.length) return res.json({ streams: [] });
+      key = meta.episodes[0].key;
+    }
+
+    const directUrl = await getDirectStreamUrl(slug, key);
+    const streams = [];
+
+    if (directUrl) {
+      streams.push({
+        title: "🎬 AlooYTV - جودة عالية",
+        url: directUrl,
+        behaviorHints: { notWebReady: false, bingeGroup: `alooytv-${slug}` },
+      });
+    }
+
+    streams.push({
+      title: "🌐 AlooYTV - متصفح الويب",
+      externalUrl: `${BASE_URL}/watch/${slug}.html?key=${key}`,
+      behaviorHints: { notWebReady: false },
+    });
+
+    res.json({ streams });
+  } catch {
+    res.json({ streams: [] });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`\n✅ AlooYTV Stremio Addon يعمل على المنفذ ${PORT}`);
+  console.log(`📡 رابط الإضافة: http://localhost:${PORT}/manifest.json`);
+  console.log(`🎬 لإضافته في Stremio: stremio://localhost:${PORT}/manifest.json\n`);
+});
