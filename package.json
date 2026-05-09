@@ -1,7 +1,7 @@
 {
   "name": "alooytv-stremio-addon",
   "version": "1.0.2",
-  "description": "Stremio addon for AlooYTV - Arabic, Turkish, Gulf and Foreign series & movies",
+  "description": "Stremio addon for AlooYTV -by Abdulluh.X",
   "main": "index.js",
   "type": "module",
   "scripts": {
