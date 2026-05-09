@@ -1,0 +1,16 @@
+{
+  "name": "alooytv-stremio-addon",
+  "version": "1.0.2",
+  "description": "Stremio addon for AlooYTV - Arabic, Turkish, Gulf and Foreign series & movies",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2"
+  }
+}
