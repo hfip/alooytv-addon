@@ -1,4 +1,4 @@
-# AlooYTV Stremio Addon
+# AlooYTV Addon
 
 إضافة Stremio لمشاهدة المسلسلات والأفلام العربية والتركية والخليجية والأجنبية من موقع AlooYTV.
 
