@@ -11,7 +11,7 @@ const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
 // ─── Cache ────────────────────────────────────────────────────────────────────
 const pageCache = new Map();
 const streamCache = new Map();
-const PAGE_TTL = 5 * 60 * 1000;
+const PAGE_TTL = 30 * 1000; // تقليل الكاش مؤقتاً للتأكد من التحديث الفوري
 const STREAM_TTL = 30 * 60 * 1000;
 
 async function fetchHtml(url) {
@@ -109,28 +109,40 @@ async function getCatalogItems(catalogId) {
 
 async function getSeriesMeta(slug) {
   const url = `${BASE_URL}/watch/${slug}.html`;
+  console.log(`[Diagnostic] Fetching meta for URL: ${url}`);
+  
   const html = await fetchHtml(url);
   const $ = load(html);
 
-  // 1. جلب اسم المسلسل وتطهيره من الكلمات الزائدة
+  // 1. جلب اسم المسلسل من h1 أو title أو أول صورة متوفرة
   let name = $("h1").first().text().trim();
   if (!name) {
     name = $("title").text().replace("alooytv", "").replace("|", "").replace("مشاهدة", "").replace("مسلسل", "").trim();
   }
+  console.log(`[Diagnostic] Extracted Title: "${name}"`);
 
-  // 2. محاولة ذكية لإيجاد البوستر الرئيسي من كود الصفحة
+  // 2. محاولة جلب الصورة الرئيسية للمسلسل من الصفحة
   let poster = "";
-  const mainImg = $("img[src*='/uploads/video_thumb/'], img[data-src*='/uploads/video_thumb/']").first();
-  if (mainImg.length) {
-    poster = mainImg.attr("data-src") || mainImg.attr("src") || "";
+  
+  // محاولة 1: البحث عن أي وسام صورة يحتوي على مسار البوسترات الشهير بالموقع
+  const thumbImg = $("img[src*='/uploads/video_thumb/'], img[data-src*='/uploads/video_thumb/']").first();
+  if (thumbImg.length) {
+    poster = thumbImg.attr("data-src") || thumbImg.attr("src") || "";
   }
+  
+  // محاولة 2: إذا لم تنجح، ابحث عن وسم meta og:image الخاص بمواقع الويب
+  if (!poster) {
+    poster = $("meta[property='og:image']").attr("content") || "";
+  }
+
   if (!poster) {
     poster = DEFAULT_THUMB;
   } else if (!poster.startsWith("http")) {
     poster = `${IMAGE_BASE}${poster}`;
   }
+  console.log(`[Diagnostic] Extracted Poster Link: "${poster}"`);
 
-  // 3. جلب التصنيف ووصف المسلسل (القصة)
+  // 3. جلب القصة والتصنيف
   const genre = $("strong:contains('Genre')").parent().find("a").first().text().trim() || "دراما";
   
   let overview = "";
@@ -145,30 +157,41 @@ async function getSeriesMeta(slug) {
   const releaseMatch = releaseText.match(/\d{4}-\d{2}-\d{2}/);
   const releaseInfo = releaseMatch ? releaseMatch[0] : "2026";
 
-  // 4. استخراج الحلقات بدقة وبشكل مرن يدعم جميع الروابط
+  // 4. جلب الحلقات بطرق بديلة ومضمونة لضمان عدم تخطي أي زر
   const episodes = [];
-  $("a[href*='key=']").each((_i, el) => {
+  
+  // سنقوم بالبحث في كل الروابط <a> بالصفحة التي قد تشير لحلقات
+  $("a").each((_i, el) => {
     const linkEl = $(el);
     const href = linkEl.attr("href") || "";
-    const keyMatch = href.match(/key=([^&]+)/);
-    if (!keyMatch) return;
-    const key = keyMatch[1];
+    const text = linkEl.text().trim();
 
-    const epText = linkEl.text().trim();
-    const epMatch = epText.match(/EP#?(\d+)/i) || epText.match(/(\d+)/);
-    const epNum = epMatch ? parseInt(epMatch[1], 10) : episodes.length + 1;
+    // نتحقق إذا كان الرابط يحتوي على كلمة key أو يشبه شكل روابط حلقات الموقع
+    const keyMatch = href.match(/[?&]key=([^&]+)/);
+    if (keyMatch) {
+      const key = keyMatch[1];
+      
+      // استخراج رقم الحلقة من النص (مثال: EP#1 أو الحلقة 1 أو 1)
+      const epMatch = text.match(/EP#?(\d+)/i) || text.match(/(\d+)/);
+      const epNum = epMatch ? parseInt(epMatch[1], 10) : (episodes.length + 1);
 
-    episodes.push({
-      id: `alooytv:${slug}:${key}`,
-      title: `الحلقة ${epNum}`,
-      season: 1,
-      episode: epNum,
-      key,
-      slug,
-    });
+      // التأكد من عدم تكرار نفس المفتاح
+      if (!episodes.some(ep => ep.key === key)) {
+        episodes.push({
+          id: `alooytv:${slug}:${key}`,
+          title: `الحلقة ${epNum}`,
+          season: 1,
+          episode: epNum,
+          key,
+          slug,
+        });
+      }
+    }
   });
 
-  // ترتيب الحلقات تصاعدياً لضمان مظهر سليم داخل ستريمو
+  console.log(`[Diagnostic] Total Episodes Found: ${episodes.length}`);
+
+  // ترتيب الحلقات تصاعدياً
   episodes.sort((a, b) => a.episode - b.episode);
 
   return {
@@ -192,14 +215,12 @@ async function getDirectStreamUrl(slug, key) {
   try {
     const html = await fetchHtml(url);
 
-    // الطريقة الأولى لفك كود البث المباشر
     const srcMatch = html.match(/<source\s+src="(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/i);
     if (srcMatch && srcMatch[1] && !srcMatch[1].match(/vid\d+\.0/)) {
       streamCache.set(cacheKey, { url: srcMatch[1], ts: Date.now() });
       return srcMatch[1];
     }
 
-    // الطريقة الثانية لفك تشفير رابط التحميل Base64
     const dlMatch = html.match(/download_video\.php\?video_url=([A-Za-z0-9+/=]+)&/);
     if (dlMatch && dlMatch[1]) {
       const decoded = Buffer.from(dlMatch[1], "base64").toString("utf8");
@@ -209,7 +230,7 @@ async function getDirectStreamUrl(slug, key) {
       }
     }
   } catch {
-    // تجاهل الأخطاء للمتابعة للمحاولة التالية
+    // ignore
   }
   return null;
 }
@@ -223,9 +244,20 @@ app.use((_req, res, next) => {
   next();
 });
 
-// الصفحة الرئيسية لتسهيل عملية فحص الإضافة
+// الصفحة الرئيسية لمتابعة التشخيص
 app.get("/", (_req, res) => {
   res.send("<h1>AlooYTV Stremio Addon is running successfully!</h1><p>Please load <a href='/manifest.json'>/manifest.json</a> in Stremio.</p>");
+});
+
+// مسار تشخيصي مباشر يمكنك فتحه في المتصفح لرؤية تفاصيل جلب المسلسل بدون ستريمو
+app.get("/test-meta/:slug", async (req, res) => {
+  const { slug } = req.params;
+  try {
+    const meta = await getSeriesMeta(slug);
+    res.json({ success: true, meta });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Manifest
@@ -254,6 +286,8 @@ app.get("/meta/:type/:id.json", async (req, res) => {
     if (!meta) return res.status(404).json({ meta: null });
 
     const finalType = requestedType === "movie" ? "movie" : "series";
+    
+    // تحويل الحلقات إلى صيغة ستريمو الرسمية لكي تظهر في القائمة
     const videos = meta.episodes.map((ep) => ({
       id: ep.id,
       title: ep.title,
@@ -322,6 +356,4 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`\n✅ AlooYTV Stremio Addon يعمل على المنفذ ${PORT}`);
-  console.log(`📡 رابط الإضافة: http://localhost:${PORT}/manifest.json`);
-  console.log(`🎬 لإضافته في Stremio: stremio://localhost:${PORT}/manifest.json\n`);
 });
