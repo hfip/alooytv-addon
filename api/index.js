@@ -112,32 +112,50 @@ async function getSeriesMeta(slug) {
   const html = await fetchHtml(url);
   const $ = load(html);
 
-  const name = $("h1").first().text().trim() || $("title").text().replace("alooytv", "").replace("|", "").trim();
-  if (!name) return null;
+  // 1. جلب اسم المسلسل وتطهيره من الكلمات الزائدة
+  let name = $("h1").first().text().trim();
+  if (!name) {
+    name = $("title").text().replace("alooytv", "").replace("|", "").replace("مشاهدة", "").replace("مسلسل", "").trim();
+  }
 
-  const posterEl = $(`img[alt="${name}"]`);
-  const poster =
-    posterEl.attr("data-src") ||
-    posterEl.attr("src") ||
-    $("img[data-src*='/uploads/video_thumb/']").first().attr("data-src") ||
-    $("img[src*='/uploads/video_thumb/']").first().attr("src") ||
-    DEFAULT_THUMB;
+  // 2. محاولة ذكية لإيجاد البوستر الرئيسي من كود الصفحة
+  let poster = "";
+  const mainImg = $("img[src*='/uploads/video_thumb/'], img[data-src*='/uploads/video_thumb/']").first();
+  if (mainImg.length) {
+    poster = mainImg.attr("data-src") || mainImg.attr("src") || "";
+  }
+  if (!poster) {
+    poster = DEFAULT_THUMB;
+  } else if (!poster.startsWith("http")) {
+    poster = `${IMAGE_BASE}${poster}`;
+  }
 
-  const genre = $("strong:contains('Genre')").parent().find("a").first().text().trim();
+  // 3. جلب التصنيف ووصف المسلسل (القصة)
+  const genre = $("strong:contains('Genre')").parent().find("a").first().text().trim() || "دراما";
+  
+  let overview = "";
+  const descMeta = $("meta[name='description']").attr("content");
+  if (descMeta) {
+    overview = descMeta.trim();
+  } else {
+    overview = $(".video-details, .plot, p").first().text().trim();
+  }
+
   const releaseText = $("strong:contains('Release')").parent().text().trim();
   const releaseMatch = releaseText.match(/\d{4}-\d{2}-\d{2}/);
-  const releaseInfo = releaseMatch ? releaseMatch[0] : "";
+  const releaseInfo = releaseMatch ? releaseMatch[0] : "2026";
 
+  // 4. استخراج الحلقات بدقة وبشكل مرن يدعم جميع الروابط
   const episodes = [];
-  $("a[href*='?key=']").each((_i, el) => {
+  $("a[href*='key=']").each((_i, el) => {
     const linkEl = $(el);
     const href = linkEl.attr("href") || "";
-    const keyMatch = href.match(/\?key=([^&]+)/);
+    const keyMatch = href.match(/key=([^&]+)/);
     if (!keyMatch) return;
     const key = keyMatch[1];
 
     const epText = linkEl.text().trim();
-    const epMatch = epText.match(/Ep#?(\d+)/i) || epText.match(/(\d+)/);
+    const epMatch = epText.match(/EP#?(\d+)/i) || epText.match(/(\d+)/);
     const epNum = epMatch ? parseInt(epMatch[1], 10) : episodes.length + 1;
 
     episodes.push({
@@ -150,11 +168,15 @@ async function getSeriesMeta(slug) {
     });
   });
 
+  // ترتيب الحلقات تصاعدياً لضمان مظهر سليم داخل ستريمو
+  episodes.sort((a, b) => a.episode - b.episode);
+
   return {
     id: `alooytv:${slug}`,
     name,
-    poster: poster.startsWith("http") ? poster : `${IMAGE_BASE}${poster}`,
+    poster,
     genre,
+    overview,
     releaseInfo,
     slug,
     episodes,
@@ -170,14 +192,14 @@ async function getDirectStreamUrl(slug, key) {
   try {
     const html = await fetchHtml(url);
 
-    // Method 1: extract from <source src="..."> — only present when a valid key is used
+    // الطريقة الأولى لفك كود البث المباشر
     const srcMatch = html.match(/<source\s+src="(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/i);
     if (srcMatch && srcMatch[1] && !srcMatch[1].match(/vid\d+\.0/)) {
       streamCache.set(cacheKey, { url: srcMatch[1], ts: Date.now() });
       return srcMatch[1];
     }
 
-    // Method 2: decode base64 from download link
+    // الطريقة الثانية لفك تشفير رابط التحميل Base64
     const dlMatch = html.match(/download_video\.php\?video_url=([A-Za-z0-9+/=]+)&/);
     if (dlMatch && dlMatch[1]) {
       const decoded = Buffer.from(dlMatch[1], "base64").toString("utf8");
@@ -187,7 +209,7 @@ async function getDirectStreamUrl(slug, key) {
       }
     }
   } catch {
-    // ignore
+    // تجاهل الأخطاء للمتابعة للمحاولة التالية
   }
   return null;
 }
@@ -199,6 +221,11 @@ app.use((_req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
   next();
+});
+
+// الصفحة الرئيسية لتسهيل عملية فحص الإضافة
+app.get("/", (_req, res) => {
+  res.send("<h1>AlooYTV Stremio Addon is running successfully!</h1><p>Please load <a href='/manifest.json'>/manifest.json</a> in Stremio.</p>");
 });
 
 // Manifest
@@ -233,7 +260,7 @@ app.get("/meta/:type/:id.json", async (req, res) => {
       season: ep.season,
       episode: ep.episode,
       released: new Date(Date.now() - ep.episode * 24 * 60 * 60 * 1000).toISOString(),
-      overview: "",
+      overview: `شاهد ${meta.name} - ${ep.title}`,
     }));
 
     res.json({
@@ -243,7 +270,7 @@ app.get("/meta/:type/:id.json", async (req, res) => {
         name: meta.name,
         poster: meta.poster,
         background: meta.poster,
-        description: meta.genre ? `النوع: ${meta.genre}` : "",
+        description: meta.overview ? meta.overview : (meta.genre ? `النوع: ${meta.genre}` : ""),
         releaseInfo: meta.releaseInfo,
         videos: finalType === "series" ? videos : undefined,
       },
