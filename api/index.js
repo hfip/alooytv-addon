@@ -1,11 +1,18 @@
+/**
+ * AlooYTV Stremio Addon
+ * Developed & Maintained by: Abdulluh.X
+ * Telegram: @Abdulluh_X
+ */
+
 import express from "express";
 import cors from "cors";
 import { load } from "cheerio";
 import fetch from "node-fetch";
 
 const PORT = process.env.PORT || 7000;
-const BASE_URL = "https://bp.alooytv13.xyz";
-const IMAGE_BASE = "https://bp.alooytv13.xyz";
+// الدومين الأساسي الجديد المستخدم لجلب صفحات المشاهدة والتشغيل
+const BASE_URL = "https://gd.alooytv12.xyz";
+const IMAGE_BASE = "https://gd.alooytv12.xyz";
 const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
@@ -25,7 +32,7 @@ async function fetchHtml(url) {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.7,en;q=0.3",
         "Cache-Control": "max-age=0",
-        Referer: BASE_URL,
+        Referer: "https://fitnur.com/",
       },
       timeout: 8000
     });
@@ -46,32 +53,35 @@ async function fetchHtml(url) {
 }
 
 // ─── Catalog definitions ──────────────────────────────────────────────────────
+// تم تحديث جميع الروابط هنا لتطابق مسارات الدومين الجديد مباشرة
 const CATALOGS = [
-  { id: "latest",              name: "أحدث الحلقات",        type: "series", url: `${BASE_URL}/tv-series.html` },
-  { id: "ramadan-arabi-2026",  name: "رمضان عربي 2026 ★",   type: "series", url: `${BASE_URL}/genre/ramadan-arabi-2026.html` },
-  { id: "ramadan-kleeji-2026", name: "رمضان خليجي 2026 ★",  type: "series", url: `${BASE_URL}/genre/ramadan-kleeji-2026.html` },
-  { id: "turki",               name: "مسلسلات تركية",       type: "series", url: `${BASE_URL}/genre/turki.html` },
-  { id: "arabic",              name: "مسلسلات عربية",       type: "series", url: `${BASE_URL}/genre/arabic.html` },
-  { id: "kleeji",              name: "مسلسلات خليجية",      type: "series", url: `${BASE_URL}/genre/kleeji.html` },
-  { id: "farisi",              name: "مسلسلات فارسية",      type: "series", url: `${BASE_URL}/genre/farisi.html` },
-  { id: "ramadan-arabi-2025",  name: "رمضان عربي 2025",     type: "series", url: `${BASE_URL}/genre/ramadan-arabi-2025.html` },
-  { id: "ramadan-kleeji-2025", name: "رمضان خليجي 2025",    type: "series", url: `${BASE_URL}/genre/ramadan-kleeji-2025.html` },
-  { id: "Korean-movies",       name: "أفلام كورية",         type: "movie",  url: `${BASE_URL}/genre/Korean-movies.html` },
-  { id: "foreign-movies",      name: "أفلام أجنبية",        type: "movie",  url: `${BASE_URL}/genre/foreign-movies.html` },
-  { id: "anmi",                name: "أنمي",                type: "series", url: `${BASE_URL}/genre/anmi.html` },
-  { id: "Foreign-series",      name: "مسلسلات أجنبية",      type: "series", url: `${BASE_URL}/genre/Foreign-series.html` },
-  { id: "Korean-series",       name: "مسلسلات كورية",       type: "series", url: `${BASE_URL}/genre/Korean-series.html` },
-  { id: "asia-series",         name: "مسلسلات آسيوية",      type: "series", url: `${BASE_URL}/genre/asia-series.html` },
+  { id: "latest",              name: "أحدث الحلقات",        type: "series", url: "https://gd.alooytv12.xyz/tv-series.html" },
+  { id: "ramadan-arabi-2026",  name: "رمضان عربي 2026 ★",   type: "series", url: "https://gd.alooytv12.xyz/genre/ramadan-arabi-2026.html" },
+  { id: "ramadan-kleeji-2026", name: "رمضان خليجي 2026 ★",  type: "series", url: "https://gd.alooytv12.xyz/genre/ramadan-kleeji-2026.html" },
+  { id: "turki",               name: "مسلسلات تركية",       type: "series", url: "https://gd.alooytv12.xyz/genre/turki.html" },
+  { id: "arabic",              name: "مسلسلات عربية",       type: "series", url: "https://gd.alooytv12.xyz/genre/arabic.html" },
+  { id: "kleeji",              name: "مسلسلات خليجية",      type: "series", url: "https://gd.alooytv12.xyz/genre/kleeji.html" },
+  { id: "farisi",              name: "مسلسلات فارسية",      type: "series", url: "https://gd.alooytv12.xyz/genre/farisi.html" },
+  { id: "ramadan-arabi-2025",  name: "رمضان عربي 2025",     type: "series", url: "https://gd.alooytv12.xyz/genre/ramadan-arabi-2025.html" },
+  { id: "ramadan-kleeji-2025", name: "رمضان خليجي 2025",    type: "series", url: "https://gd.alooytv12.xyz/genre/ramadan-kleeji-2025.html" },
+  { id: "Korean-movies",       name: "أفلام كورية",         type: "movie",  url: "https://gd.alooytv12.xyz/genre/Korean-movies.html" },
+  { id: "foreign-movies",      name: "أفلام أجنبية",        type: "movie",  url: "https://gd.alooytv12.xyz/genre/foreign-movies.html" },
+  { id: "anmi",                name: "أنمي",                type: "series", url: "https://gd.alooytv12.xyz/genre/anmi.html" },
+  { id: "Foreign-series",      name: "مسلسلات أجنبية",      type: "series", url: "https://gd.alooytv12.xyz/genre/Foreign-series.html" },
+  { id: "Korean-series",       name: "مسلسلات كورية",       type: "series", url: "https://gd.alooytv12.xyz/genre/Korean-series.html" },
+  { id: "asia-series",         name: "مسلسلات آسيوية",      type: "series", url: "https://gd.alooytv12.xyz/genre/asia-series.html" },
+  { id: "arabic-movies",       name: "أفلام عربية",         type: "movie",  url: "https://gd.alooytv12.xyz/genre/arabic-movies.html" },
+  { id: "masrahiyat",          name: "مسرحيات",             type: "movie",  url: "https://gd.alooytv12.xyz/genre/masrahiyat.html" },
 ];
 
 // ─── Manifest ─────────────────────────────────────────────────────────────────
 const MANIFEST = {
   id: "community.alooytv.addon",
-  version: "1.0.4",
+  version: "1.0.5",
   name: "AlooYTV",
-  description: "مسلسلات وأفلام عربية وتركية وخليجية وفارسية وأجنبية من موقع AlooYTV",
-  logo: "https://bp.alooytv13.xyz/favicon.ico",
-  background: "https://bp.alooytv13.xyz/uploads/video_thumb/1890.jpg",
+  description: "مسلسلات وأفلام عربية وتركية وخليجية وفارسية وأجنبية من موقع AlooYTV - بواسطة Abdulluh.X",
+  logo: "https://gd.alooytv12.xyz/favicon.ico",
+  background: "https://gd.alooytv12.xyz/uploads/video_thumb/1890.jpg",
   types: ["series", "movie"],
   catalogs: CATALOGS.map((c) => ({
     type: c.type,
