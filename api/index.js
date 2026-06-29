@@ -9,8 +9,6 @@ import cors from "cors";
 import { load } from "cheerio";
 import fetch from "node-fetch";
 
-const PORT = process.env.PORT || 7000;
-// الدومين الأساسي الجديد المستخدم لجلب صفحات المشاهدة والتشغيل
 const BASE_URL = "https://gd.alooytv12.xyz";
 const IMAGE_BASE = "https://gd.alooytv12.xyz";
 const DEFAULT_THUMB = `${IMAGE_BASE}/uploads/default_image/blank_thumbnail.jpg`;
@@ -53,7 +51,6 @@ async function fetchHtml(url) {
 }
 
 // ─── Catalog definitions ──────────────────────────────────────────────────────
-// تم تحديث جميع الروابط هنا لتطابق مسارات الدومين الجديد مباشرة
 const CATALOGS = [
   { id: "latest",              name: "أحدث الحلقات",        type: "series", url: "https://gd.alooytv12.xyz/tv-series.html" },
   { id: "ramadan-arabi-2026",  name: "رمضان عربي 2026 ★",   type: "series", url: "https://gd.alooytv12.xyz/genre/ramadan-arabi-2026.html" },
@@ -372,7 +369,5 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`\n✅ AlooYTV Stremio Addon يعمل على المنفذ ${PORT}`);
-});
+// تصدير التطبيق كـ Serverless Function لـ Vercel
+export default app;
